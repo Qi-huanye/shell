@@ -445,23 +445,25 @@ Singleton {
                 return;
             }
 
-            const profile = profiles[0];
-            if (profile) {
-                executeCommand([root.nmcliCommandConnection, "modify", "uuid", profile.uuid, root.securityPsk, password], update => {
-                    if (update.success)
-                        activateWifiProfile(profile.uuid, bssid, finish);
-                    else
-                        finish(update);
-                });
-            } else {
-                createWifiProfile(ssid, bssid, password, finish);
-            }
+            createWifiProfile(ssid, bssid, password, profiles[0], finish);
         });
     }
 
-    function createWifiProfile(ssid: string, bssid: string, password: string, callback: var): void {
-        // Save a new profile only after authentication succeeds.
-        executeCommand([root.nmcliCommandConnection, "add", "save", "no", root.connectionParamType, root.deviceTypeWifi, root.connectionParamConName, ssid, root.connectionParamIfname, "*", root.connectionParamSsid, ssid, "connection.autoconnect", "no", root.securityKeyMgmt, root.keyMgmtWpaPsk, root.securityPsk, password], added => {
+    function createWifiProfile(ssid: string, bssid: string, password: string, savedProfile: var, callback: var): void {
+        const keyMgmt = savedProfile?.keyMgmt ?? root.keyMgmtWpaPsk;
+        if (keyMgmt !== root.keyMgmtWpaPsk && keyMgmt !== "sae") {
+            callback?.({
+                success: false
+            });
+            return;
+        }
+
+        const command = [root.nmcliCommandConnection, "add", "save", "no", root.connectionParamType, root.deviceTypeWifi, root.connectionParamConName, ssid, root.connectionParamIfname, "*", root.connectionParamSsid, ssid, "connection.autoconnect", "no", root.securityKeyMgmt, keyMgmt, root.securityPsk, password];
+        // A saved profile keeps its own IP settings. Verify the new key before changing it.
+        if (savedProfile)
+            command.push("ipv4.method", "disabled", "ipv6.method", "disabled");
+
+        executeCommand(command, added => {
             const uuid = added.output.match(/\(([0-9a-f-]{36})\) successfully added\.\s*$/i)?.[1];
             if (!added.success || !uuid) {
                 callback?.({
@@ -471,9 +473,27 @@ Singleton {
                 return;
             }
 
+            function removeTemporaryProfile(result) {
+                root.executeCommand([root.nmcliCommandConnection, "delete", "uuid", uuid], removed => {
+                    if (!removed.success)
+                        console.warn(lc, "Failed to remove temporary Wi-Fi profile " + uuid);
+                    callback?.(result);
+                });
+            }
+
             activateWifiProfile(uuid, bssid, activated => {
                 if (!activated.success) {
-                    executeCommand([root.nmcliCommandConnection, "delete", "uuid", uuid], () => callback?.(activated));
+                    removeTemporaryProfile(activated);
+                    return;
+                }
+
+                if (savedProfile) {
+                    root.executeCommand([root.nmcliCommandConnection, "modify", "uuid", savedProfile.uuid, root.securityPsk, password], updated => {
+                        if (updated.success)
+                            root.activateWifiProfile(savedProfile.uuid, bssid, removeTemporaryProfile);
+                        else
+                            removeTemporaryProfile(updated);
+                    });
                     return;
                 }
 
