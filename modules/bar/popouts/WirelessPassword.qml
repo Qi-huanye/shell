@@ -20,7 +20,7 @@ ColumnLayout {
     readonly property bool shouldBeVisible: root.popouts.currentName === "wirelesspassword"
 
     function checkConnectionStatus(): void {
-        if (!root.shouldBeVisible || !connectButton.connecting) {
+        if (!root.shouldBeVisible || !connectionMonitor.running) {
             return;
         }
 
@@ -32,23 +32,6 @@ ColumnLayout {
             // Use Timer for actual delay
             connectionSuccessTimer.start();
             return;
-        }
-
-        // Check for connection failures - if pending connection was cleared but we're not connected
-        if (Nmcli.pendingConnection === null && connectButton.connecting) {
-            // Wait a bit more before giving up (allow time for connection to establish)
-            if (connectionMonitor.repeatCount > 10) {
-                connectionMonitor.stop();
-                connectButton.connecting = false;
-                connectButton.hasError = true;
-                connectButton.enabled = true;
-                connectButton.text = Tr.tr("Connect");
-                passwordContainer.passwordBuffer = "";
-                // Delete the failed connection
-                if (root.network && root.network.ssid) {
-                    Nmcli.forgetNetwork(root.network.ssid);
-                }
-            }
         }
     }
 
@@ -519,37 +502,19 @@ ColumnLayout {
 
                         // Connect to network
                         NetworkConnection.connectWithPassword(root.network, password, result => {
-                            if (result && result.success)
-                            // Connection successful, monitor will handle the rest
-                            {} else if (result && result.needsPassword) {
-                                // Shouldn't happen since we provided password
-                                connectionMonitor.stop();
-                                connecting = false;
-                                hasError = true;
-                                enabled = true;
-                                text = Tr.tr("Connect");
-                                passwordContainer.passwordBuffer = "";
-                                // Delete the failed connection
-                                if (root.network && root.network.ssid) {
-                                    Nmcli.forgetNetwork(root.network.ssid);
-                                }
-                            } else {
-                                // Connection failed immediately - show error
-                                connectionMonitor.stop();
-                                connecting = false;
-                                hasError = true;
-                                enabled = true;
-                                text = Tr.tr("Connect");
-                                passwordContainer.passwordBuffer = "";
-                                // Delete the failed connection
-                                if (root.network && root.network.ssid) {
-                                    Nmcli.forgetNetwork(root.network.ssid);
-                                }
+                            if (result?.success) {
+                                connectionMonitor.start();
+                                root.checkConnectionStatus();
+                                return;
                             }
-                        });
 
-                        // Start monitoring connection
-                        connectionMonitor.start();
+                            connectionMonitor.stop();
+                            connecting = false;
+                            hasError = true;
+                            enabled = true;
+                            text = Tr.tr("Connect");
+                            passwordContainer.passwordBuffer = "";
+                        });
                     }
                 }
             }
@@ -559,22 +524,9 @@ ColumnLayout {
     Timer {
         id: connectionMonitor
 
-        property int repeatCount: 0
-
         interval: 1000
         repeat: true
-        triggeredOnStart: false
-
-        onTriggered: {
-            repeatCount++;
-            root.checkConnectionStatus();
-        }
-
-        onRunningChanged: {
-            if (!running) {
-                repeatCount = 0;
-            }
-        }
+        onTriggered: root.checkConnectionStatus()
     }
 
     Timer {
@@ -603,19 +555,6 @@ ColumnLayout {
         function onActiveChanged() {
             if (root.shouldBeVisible) {
                 root.checkConnectionStatus();
-            }
-        }
-
-        function onConnectionFailed(ssid: string) {
-            if (root.shouldBeVisible && root.network && root.network.ssid === ssid && connectButton.connecting) {
-                connectionMonitor.stop();
-                connectButton.connecting = false;
-                connectButton.hasError = true;
-                connectButton.enabled = true;
-                connectButton.text = Tr.tr("Connect");
-                passwordContainer.passwordBuffer = "";
-                // Delete the failed connection
-                Nmcli.forgetNetwork(ssid);
             }
         }
 

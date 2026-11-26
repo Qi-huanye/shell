@@ -29,30 +29,6 @@ QtObject {
     id: root
 
     /**
-     * Handle network connection with automatic disconnection if needed.
-     * If there's an active network different from the target, disconnects first,
-     * then connects to the target network.
-     *
-     * @param network The network object to connect to (must have ssid property)
-     * @param session Optional Session object (for controlcenter - must have network property with showPasswordDialog and pendingNetwork)
-     * @param onPasswordNeeded Optional callback function(network) called when password is needed (for bar popouts)
-     */
-    function handleConnect(network, session, onPasswordNeeded): void {
-        if (!network) {
-            return;
-        }
-
-        if (Nmcli.active && Nmcli.active.ssid !== network.ssid) {
-            Nmcli.disconnectFromNetwork();
-            Qt.callLater(() => {
-                root.connectToNetwork(network, session, onPasswordNeeded);
-            });
-        } else {
-            root.connectToNetwork(network, session, onPasswordNeeded);
-        }
-    }
-
-    /**
      * Connect to a wireless network.
      * Handles both secured and open networks, checks for saved profiles,
      * and shows password dialog if needed.
@@ -61,41 +37,33 @@ QtObject {
      * @param session Optional Session object (for controlcenter - must have network property with showPasswordDialog and pendingNetwork)
      * @param onPasswordNeeded Optional callback function(network) called when password is needed (for bar popouts)
      */
-    function connectToNetwork(network, session, onPasswordNeeded): void {
+    function handleConnect(network, session, onPasswordNeeded): void {
         if (!network) {
             return;
         }
 
-        if (network.isSecure) {
-            const hasSavedProfile = Nmcli.hasSavedProfile(network.ssid);
-
-            if (hasSavedProfile) {
-                Nmcli.connectToNetwork(network.ssid, "", network.bssid, null);
-            } else {
-                // Use password check with callback
-                Nmcli.connectToNetworkWithPasswordCheck(network.ssid, network.isSecure, result => {
-                    if (result.needsPassword) {
-                        // Clear pending connection if exists
-                        if (Nmcli.pendingConnection) {
-                            Nmcli.connectionCheckTimer.stop();
-                            Nmcli.immediateCheckTimer.stop();
-                            Nmcli.immediateCheckTimer.checkCount = 0;
-                            Nmcli.pendingConnection = null;
-                        }
-
-                        // Handle password dialog - use session if available, otherwise use callback
-                        if (session && session.network) {
-                            session.network.showPasswordDialog = true;
-                            session.network.pendingNetwork = network;
-                        } else if (onPasswordNeeded) {
-                            onPasswordNeeded(network);
-                        }
-                    }
-                }, network.bssid);
-            }
-        } else {
+        if (!network.isSecure) {
             Nmcli.connectToNetwork(network.ssid, "", network.bssid, null);
+            return;
         }
+
+        // Scans may replace the access point while NetworkManager is connecting.
+        const target = {
+            ssid: network.ssid,
+            bssid: network.bssid,
+            isSecure: network.isSecure
+        };
+        Nmcli.connectToNetworkWithPasswordCheck(target.ssid, result => {
+            if (!result.needsPassword)
+                return;
+
+            if (session && session.network) {
+                session.network.pendingNetwork = target;
+                session.network.showPasswordDialog = true;
+            } else {
+                onPasswordNeeded?.(target);
+            }
+        }, target.bssid);
     }
 
     /**
